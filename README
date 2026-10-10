@@ -1,0 +1,3 @@
+cd tv-admin
+git init
+git remote add origin https://github.com/kadirsener1/tv-admin.git
