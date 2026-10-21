@@ -147,6 +147,29 @@ function renderPage(content) {
   .status.ok { color: #68d391; }
   .status.err { color: #fc8181; }
   .empty { padding: 20px; color: #666; text-align: center; font-size: 13px; }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    display: flex; align-items: center; justify-content: center; z-index: 1000;
+  }
+  .modal {
+    background: #1a1a1a; padding: 24px; border-radius: 8px;
+    min-width: 380px; max-width: 90vw; border: 1px solid #333;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  }
+  .modal h3 { margin: 0 0 16px 0; font-size: 16px; }
+  .modal label { display: block; margin-bottom: 6px; font-size: 13px; color: #aaa; }
+  .modal select, .modal input[type=text] {
+    width: 100%; padding: 8px; margin-bottom: 14px;
+    background: #111; color: #eee; border: 1px solid #333;
+    border-radius: 4px; font-size: 14px;
+  }
+  .modal .hint { font-size: 11px; color: #666; margin: -8px 0 14px 0; }
+  .modal .modal-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
+  .modal button { padding: 8px 14px; font-size: 14px; }
+  .modal button.cancel { background: #4a5568; }
+  .modal button.cancel:hover { background: #718096; }
 </style>
 </head>
 <body>
@@ -333,7 +356,7 @@ function renderChannelList() {
     catBtn.className = 'cat-btn';
     catBtn.textContent = '📁';
     catBtn.title = 'Kategori değiştir';
-    catBtn.onclick = (e) => { e.stopPropagation(); quickChangeCategory(i); };
+    catBtn.onclick = (e) => { e.stopPropagation(); openCategoryModal(i); };
     div.appendChild(catBtn);
     el.appendChild(div);
   }
@@ -443,35 +466,165 @@ function moveChannel(dir) {
   setStatus('Kanal ' + (dir < 0 ? 'yukarı' : 'aşağı') + ' taşındı (henüz kaydedilmedi)', 'ok');
 }
 
-// --- Hızlı kategori değiştirme (tek kanal) ---
-function quickChangeCategory(i) {
+// --- Kategori değiştirme modalı ---
+function openCategoryModal(i) {
   const meta = parseExtinf(channels[i].extinf);
   const current = meta['group-title'] || '';
-  const newCat = prompt('Yeni kategori adı (boş bırak = grupsuz):', current);
-  if (newCat === null) return;
-  meta['group-title'] = newCat.trim();
-  channels[i].extinf = buildExtinf(meta);
-  applyFilter();
-  setStatus('Kategori değiştirildi (henüz kaydedilmedi)', 'ok');
+  const groups = getGroups();
+
+  let options = '<option value="">(grupsuz)</option>';
+  for (const g of groups) {
+    options += \`<option value="\${escapeAttr(g)}"\${current === g ? ' selected' : ''}>\${escapeHtml(g)}</option>\`;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = \`
+    <div class="modal">
+      <h3>📁 Kategori Değiştir</h3>
+      <label>Mevcut Kategorilerden Seç</label>
+      <select id="modal-cat-select">\${options}</select>
+      <label>Veya Yeni Kategori Yaz</label>
+      <input id="modal-cat-input" type="text" placeholder="Yeni kategori adı...">
+      <div class="hint">Yeni kategori yazarsan, üstteki seçim yerine bu kullanılır. Boş bırakırsan seçili kategori uygulanır.</div>
+      <div class="modal-buttons">
+        <button class="cancel" id="modal-cancel">İptal</button>
+        <button class="success" id="modal-apply">✅ Uygula</button>
+      </div>
+    </div>
+  \`;
+
+  document.body.appendChild(overlay);
+
+  const selectEl = overlay.querySelector('#modal-cat-select');
+  const inputEl = overlay.querySelector('#modal-cat-input');
+
+  // Input'a yazınca select'i sıfırla (kullanıcıya hangisinin kullanılacağını belli etmek için)
+  inputEl.addEventListener('input', () => {
+    if (inputEl.value.trim() !== '') {
+      selectEl.disabled = true;
+      selectEl.style.opacity = '0.5';
+    } else {
+      selectEl.disabled = false;
+      selectEl.style.opacity = '1';
+    }
+  });
+
+  // Select değişince input'u temizle
+  selectEl.addEventListener('change', () => {
+    if (inputEl.value.trim() !== '') {
+      inputEl.value = '';
+      selectEl.disabled = false;
+      selectEl.style.opacity = '1';
+    }
+  });
+
+  inputEl.focus();
+
+  const close = () => overlay.remove();
+
+  const apply = () => {
+    const typed = inputEl.value.trim();
+    const newValue = typed !== '' ? typed : selectEl.value;
+    meta['group-title'] = newValue;
+    channels[i].extinf = buildExtinf(meta);
+    close();
+    applyFilter();
+    setStatus('Kategori "' + (newValue || 'grupsuz') + '" olarak değiştirildi (henüz kaydedilmedi)', 'ok');
+  };
+
+  overlay.querySelector('#modal-cancel').onclick = close;
+  overlay.querySelector('#modal-apply').onclick = apply;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter') apply();
+  });
 }
 
 // --- Toplu kategori değiştirme ---
 function bulkChangeCategory() {
-  const oldCat = prompt('Hangi kategorideki kanallar değiştirilsin?\\n(boş bırakırsan TÜM kanallar)');
-  if (oldCat === null) return;
-  const newCat = prompt('Yeni kategori adı (boş bırak = grupsuz):');
-  if (newCat === null) return;
-  let count = 0;
-  for (const ch of channels) {
-    const meta = parseExtinf(ch.extinf);
-    if (oldCat === '' || (meta['group-title'] || '') === oldCat) {
-      meta['group-title'] = newCat.trim();
-      ch.extinf = buildExtinf(meta);
-      count++;
-    }
+  const groups = getGroups();
+
+  let options = '<option value="__all__">-- TÜM KANALLAR --</option>';
+  options += '<option value="">(grupsuz)</option>';
+  for (const g of groups) {
+    options += \`<option value="\${escapeAttr(g)}">\${escapeHtml(g)}</option>\`;
   }
-  applyFilter();
-  setStatus(count + ' kanalın kategorisi değiştirildi (henüz kaydedilmedi)', 'ok');
+
+  let newOptions = '<option value="">(grupsuz)</option>';
+  for (const g of groups) {
+    newOptions += \`<option value="\${escapeAttr(g)}">\${escapeHtml(g)}</option>\`;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = \`
+    <div class="modal">
+      <h3>📁 Toplu Kategori Değiştir</h3>
+      <label>Hangi kategoridekiler?</label>
+      <select id="bulk-old">\${options}</select>
+      <label>Yeni Kategori (seç veya yaz)</label>
+      <select id="bulk-new-select">\${newOptions}</select>
+      <input id="bulk-new-input" type="text" placeholder="Yeni kategori adı yaz...">
+      <div class="hint">Yeni kategori yazarsan, üstteki seçim yerine bu kullanılır. Boş bırakırsan seçili kategori uygulanır.</div>
+      <div class="modal-buttons">
+        <button class="cancel" id="bulk-cancel">İptal</button>
+        <button class="success" id="bulk-apply">✅ Uygula</button>
+      </div>
+    </div>
+  \`;
+
+  document.body.appendChild(overlay);
+
+  const oldSel = overlay.querySelector('#bulk-old');
+  const newSel = overlay.querySelector('#bulk-new-select');
+  const newInp = overlay.querySelector('#bulk-new-input');
+
+  newInp.addEventListener('input', () => {
+    if (newInp.value.trim() !== '') {
+      newSel.disabled = true;
+      newSel.style.opacity = '0.5';
+    } else {
+      newSel.disabled = false;
+      newSel.style.opacity = '1';
+    }
+  });
+
+  newSel.addEventListener('change', () => {
+    if (newInp.value.trim() !== '') {
+      newInp.value = '';
+      newSel.disabled = false;
+      newSel.style.opacity = '1';
+    }
+  });
+
+  const close = () => overlay.remove();
+
+  overlay.querySelector('#bulk-cancel').onclick = close;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+
+  overlay.querySelector('#bulk-apply').onclick = () => {
+    const oldCat = oldSel.value;
+    const typed = newInp.value.trim();
+    const newCat = typed !== '' ? typed : newSel.value;
+
+    let count = 0;
+    for (const ch of channels) {
+      const m = parseExtinf(ch.extinf);
+      const chCat = m['group-title'] || '';
+      const match = (oldCat === '__all__') || (chCat === oldCat);
+      if (match) {
+        m['group-title'] = newCat;
+        ch.extinf = buildExtinf(m);
+        count++;
+      }
+    }
+    close();
+    applyFilter();
+    setStatus(count + ' kanalın kategorisi "' + (newCat || 'grupsuz') + '" olarak değiştirildi (henüz kaydedilmedi)', 'ok');
+  };
 }
 
 function deleteChannel() {
