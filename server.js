@@ -101,10 +101,15 @@ function renderPage(content) {
   .toolbar { padding: 12px 20px; background: #181818; border-bottom: 1px solid #333; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   button { padding: 8px 14px; background: #2b6cb0; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
   button:hover { background: #3182ce; }
+  button:disabled { background: #2a2a2a; color: #555; cursor: not-allowed; }
   button.danger { background: #c53030; }
   button.danger:hover { background: #e53e3e; }
   button.success { background: #2f855a; }
   button.success:hover { background: #38a169; }
+  button.move-btn { background: #2d3748; padding: 4px 10px; font-size: 15px; }
+  button.move-btn:hover:not(:disabled) { background: #4a5568; }
+  button.cat-btn { background: #4a5568; padding: 4px 8px; font-size: 13px; }
+  button.cat-btn:hover { background: #718096; }
   .container { display: flex; height: calc(100vh - 100px); }
   .sidebar { width: 40%; border-right: 1px solid #333; display: flex; flex-direction: column; }
   .search-bar { padding: 10px 12px; background: #161616; border-bottom: 1px solid #2a2a2a; }
@@ -156,6 +161,7 @@ function renderPage(content) {
   <button onclick="addChannel()">➕ Yeni Kanal</button>
   <button onclick="reload()">🔄 Yeniden Yükle</button>
   <button onclick="showRaw()">📝 Ham M3U</button>
+  <button onclick="bulkChangeCategory()">📁 Toplu Kategori Değiştir</button>
 </div>
 <div class="container">
   <div class="sidebar">
@@ -323,6 +329,12 @@ function renderChannelList() {
         <div class="group">\${escapeHtml(meta['group-title'] || '')}</div>
       </div>
     \`;
+    const catBtn = document.createElement('button');
+    catBtn.className = 'cat-btn';
+    catBtn.textContent = '📁';
+    catBtn.title = 'Kategori değiştir';
+    catBtn.onclick = (e) => { e.stopPropagation(); quickChangeCategory(i); };
+    div.appendChild(catBtn);
     el.appendChild(div);
   }
 }
@@ -348,14 +360,23 @@ function selectChannel(i) {
   }
   groupOptions += \`<option value="__new__">+ Yeni grup oluştur...</option>\`;
 
+  const filtered = filterChannels();
+  const posInFiltered = filtered.findIndex(x => x.i === i);
+  const canUp = posInFiltered > 0;
+  const canDown = posInFiltered >= 0 && posInFiltered < filtered.length - 1;
+
   editor.innerHTML = \`
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <div style="font-size:13px;color:#888">Kanal #\${i + 1}</div>
-      <div style="font-size:12px;color:#666;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${escapeHtml(ch.url)}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="move-btn" onclick="moveChannel(-1)" \${canUp ? '' : 'disabled'} title="Yukarı taşı">⬆️</button>
+        <button class="move-btn" onclick="moveChannel(1)" \${canDown ? '' : 'disabled'} title="Aşağı taşı">⬇️</button>
+        <div style="font-size:13px;color:#888">Kanal #\${i + 1}</div>
+      </div>
+      <div style="font-size:12px;color:#666;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">\${escapeHtml(ch.url)}</div>
     </div>
     <label>Kanal Adı</label>
     <input id="f-name" value="\${escapeAttr(meta.name)}">
-    <label>Grup</label>
+    <label>Grup / Kategori</label>
     <select id="f-group" onchange="onGroupSelect()">\${groupOptions}</select>
     <input id="f-newgroup" placeholder="Yeni grup adı" style="display:none">
     <label>Logo URL</label>
@@ -405,6 +426,52 @@ function applyChanges() {
   ch.opts = optsText ? optsText.split('\\n').filter(l => l.trim()) : [];
   applyFilter();
   setStatus('Değişiklikler uygulandı (henüz kaydedilmedi)', 'ok');
+}
+
+// --- Kanalları yukarı/aşağı taşıma ---
+function moveChannel(dir) {
+  const filtered = filterChannels();
+  const pos = filtered.findIndex(x => x.i === currentIndex);
+  if (pos === -1) return;
+  const targetPos = pos + dir;
+  if (targetPos < 0 || targetPos >= filtered.length) return;
+  const targetIndex = filtered[targetPos].i;
+  [channels[currentIndex], channels[targetIndex]] = [channels[targetIndex], channels[currentIndex]];
+  currentIndex = targetIndex;
+  applyFilter();
+  selectChannel(currentIndex);
+  setStatus('Kanal ' + (dir < 0 ? 'yukarı' : 'aşağı') + ' taşındı (henüz kaydedilmedi)', 'ok');
+}
+
+// --- Hızlı kategori değiştirme (tek kanal) ---
+function quickChangeCategory(i) {
+  const meta = parseExtinf(channels[i].extinf);
+  const current = meta['group-title'] || '';
+  const newCat = prompt('Yeni kategori adı (boş bırak = grupsuz):', current);
+  if (newCat === null) return;
+  meta['group-title'] = newCat.trim();
+  channels[i].extinf = buildExtinf(meta);
+  applyFilter();
+  setStatus('Kategori değiştirildi (henüz kaydedilmedi)', 'ok');
+}
+
+// --- Toplu kategori değiştirme ---
+function bulkChangeCategory() {
+  const oldCat = prompt('Hangi kategorideki kanallar değiştirilsin?\\n(boş bırakırsan TÜM kanallar)');
+  if (oldCat === null) return;
+  const newCat = prompt('Yeni kategori adı (boş bırak = grupsuz):');
+  if (newCat === null) return;
+  let count = 0;
+  for (const ch of channels) {
+    const meta = parseExtinf(ch.extinf);
+    if (oldCat === '' || (meta['group-title'] || '') === oldCat) {
+      meta['group-title'] = newCat.trim();
+      ch.extinf = buildExtinf(meta);
+      count++;
+    }
+  }
+  applyFilter();
+  setStatus(count + ' kanalın kategorisi değiştirildi (henüz kaydedilmedi)', 'ok');
 }
 
 function deleteChannel() {
